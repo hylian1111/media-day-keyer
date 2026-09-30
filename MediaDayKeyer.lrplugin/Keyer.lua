@@ -89,18 +89,20 @@ local function countFiles(dir, suffix)
     return n
 end
 
+-- Photos marked for keying (picked, or blue label) that haven't been sent yet. The second
+-- result is the marked photos that were already keyed earlier.
 local function newTagged(catalog, seen, trigger)
     local photos = catalog:getAllPhotos()
     local meta = catalog:batchGetRawMetadata(photos, { "pickStatus", "colorNameForLabel", "uuid", "fileFormat" })
-    local found = {}
+    local found, done = {}, {}
     for photo, m in pairs(meta) do
         local tagged = (trigger == "blue" and m.colorNameForLabel == "blue")
                     or (trigger == "pick" and m.pickStatus == 1)
-        if tagged and m.fileFormat ~= "VIDEO" and not seen[m.uuid] then
-            found[#found + 1] = photo
+        if tagged and m.fileFormat ~= "VIDEO" then
+            if seen[m.uuid] then done[#done + 1] = photo else found[#found + 1] = photo end
         end
     end
-    return found
+    return found, done
 end
 
 -- A plugin downloaded from the internet arrives quarantined, and macOS refuses to run the bundled
@@ -168,8 +170,10 @@ local function watchLoop(runId, catalog, outDir, stateFile, seen, status, withPs
     end
 end
 
+local ENGINE_NEXT = string.format('"%s" next --work "%s" >> "%s" 2>&1', ENGINE, WORK, RUNLOG)
+
 local function processLoop(runId, status)
-    local cmd = string.format('"%s" next --work "%s" >> "%s" 2>&1', ENGINE, WORK, RUNLOG)
+    local cmd = ENGINE_NEXT
     while prefs.runId == runId do
         local waiting = countFiles(INBOX, ".json")
         if waiting > 0 then
@@ -206,7 +210,18 @@ function Keyer.start(withPsd, trigger)
 
     local catalog, outDir, stateFile = catalogInfo()
     local seen = loadSeen(stateFile)
-    local existing = newTagged(catalog, seen, trigger)
+    local existing, alreadyKeyed = newTagged(catalog, seen, trigger)
+    local again = {}
+    if #alreadyKeyed > 0 then
+        -- each photo is keyed once, so say so instead of silently skipping them
+        local answer = LrDialogs.confirm(
+            string.format("%d photo(s) with %s were already keyed earlier.", #alreadyKeyed,
+                          trigger == "blue" and "a blue label" or "a pick flag"),
+            "Key them again, or leave the cut-outs you already have?",
+            "Key them again", "Cancel", "Leave them")
+        if answer == "cancel" then return end
+        if answer == "ok" then again = alreadyKeyed end
+    end
     if #existing > 0 then
         local answer = LrDialogs.confirm(
             string.format(t.already, #existing),
@@ -226,6 +241,9 @@ function Keyer.start(withPsd, trigger)
     LrTasks.startAsyncTask(function() watchLoop(runId, catalog, outDir, stateFile, seen, status, withPsd, trigger) end,
                            "Media Day Keyer watch")
     LrTasks.startAsyncTask(function() processLoop(runId, status) end, "Media Day Keyer process")
+    if #again > 0 then
+        LrTasks.startAsyncTask(function() queue(again, outDir, stateFile, seen, withPsd) end, "Media Day Keyer re-key")
+    end
 
     -- progress bar in the top-left corner doubles as the status display and the off switch
     LrFunctionContext.callWithContext("Media Day Keyer", function(context)
@@ -268,10 +286,25 @@ function Keyer.rekeySelected()
     local n = queue(photos, outDir, stateFile, seen, prefs.runId ~= nil and prefs.withPsd == true)
     if prefs.runId then
         LrDialogs.showBezel(string.format("Re-keying %d photo(s)", n))
-    else
-        LrDialogs.message(string.format("Queued %d photo(s).", n),
-            "They'll be keyed as soon as you turn on one of the Start Auto-Keying commands in File > Plug-in Extras.")
+        return
     end
+    -- auto-keying is off: key them right now, with a progress bar
+    local failedBefore = countFiles(FAILED, ".error.txt")
+    LrFunctionContext.callWithContext("Media Day Keyer re-key", function(context)
+        local progress = LrProgressScope { title = "Media Day Keyer — re-keying", functionContext = context }
+        progress:setCancelable(true)
+        local done = 0
+        while countFiles(INBOX, ".json") > 0 and not progress:isCanceled() do
+            progress:setCaption(string.format("%d of %d", done + 1, n))
+            progress:setPortionComplete(done, n)
+            LrTasks.execute(ENGINE_NEXT)
+            done = done + 1
+        end
+        progress:done()
+    end)
+    local failed = countFiles(FAILED, ".error.txt") - failedBefore
+    LrDialogs.showBezel(string.format("Re-keyed %d photo(s)%s", n,
+        failed > 0 and " — see Show Log and Failed Photos for problems" or ""))
 end
 
 function Keyer.openCutouts()
