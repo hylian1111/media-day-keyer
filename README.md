@@ -39,9 +39,9 @@ Everything goes into a `Media Day Cutouts` folder next to your catalog file:
 - Every PNG is the full camera frame at full resolution, so players line up the same way in a template.
 - `PSD/IMG_1234.psd` (**+ PSDs** mode only): one layer per person, each with an editable mask, so you can paint back a missed edge.
 
-Each photo is keyed once. If you change an edit afterwards, select the photo and choose **Re-key Selected Photos**.
+Each photo is keyed once. If you change an edit afterwards, select the photo and choose **Re-key Selected Photos**. That works whether auto-keying is on or off.
 
-If photos were already marked when you press Start, it asks whether to key those too or only new ones.
+When you press Start, it checks what's already marked and asks about it: whether to key photos marked before you started, and whether to redo any that were keyed in an earlier session.
 
 ## Getting good cut-outs
 
