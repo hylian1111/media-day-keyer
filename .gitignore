@@ -1,0 +1,4 @@
+build/
+dist/
+MediaDayKeyer.lrplugin/bin/
+.DS_Store
